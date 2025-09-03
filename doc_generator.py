@@ -14,13 +14,78 @@ class APIDocumentation:
         self.description = description or "Handler function"
         self.handler_func = handler_func
         self.data_shapes = data_shapes or []
+        self.parameters = self._extract_parameters(path)
+        self.framework = "unknown"
         self.curl_example = self._generate_curl_example()
+        self.auth_required = self._check_auth_required(description)
+        self.rate_limited = self._check_rate_limited(description)
 
     def _generate_curl_example(self):
-        if self.method == "GET":
-            return f"curl {self.path}"
+        # Generate more sophisticated curl commands
+        if self.method in ["GET", "HEAD"]:
+            example = f"curl -X {self.method} {self.path}"
+        elif self.method in ["POST", "PUT", "PATCH"]:
+            example = f"curl -X {self.method} {self.path} -H \"Content-Type: application/json\" -d \"{{}}\""
         else:
-            return f"curl -X {self.method} {self.path}"
+            example = f"curl -X {self.method} {self.path}"
+
+        # Add auth if required
+        if self.auth_required:
+            example += " -H \"Authorization: Bearer YOUR_TOKEN\""
+
+        return example
+
+    def _extract_parameters(self, path):
+        """Extract path parameters like :id, {id}, userId"""
+        params = []
+
+        # Pattern 1: :param (common in many frameworks)
+        param_matches = re.finditer(r':(\w+)', path)
+        for match in param_matches:
+            param_name = match.group(1)
+            params.append({
+                'name': param_name,
+                'type': 'string',
+                'location': 'path',
+                'example': self._get_param_example(param_name),
+                'required': True
+            })
+
+        # Pattern 2: {param} (Gorilla Mux, Echo, etc.)
+        param_matches = re.finditer(r'\{(\w+)\}', path)
+        for match in param_matches:
+            param_name = match.group(1)
+            params.append({
+                'name': param_name,
+                'type': 'string',
+                'location': 'path',
+                'example': self._get_param_example(param_name),
+                'required': True
+            })
+
+        return params
+
+    def _get_param_example(self, param_name):
+        """Generate appropriate example values for parameters"""
+        examples = {
+            'id': '123',
+            'userId': '123',
+            'user_id': '123',
+            'articleId': '456',
+            'postId': '789',
+            'commentId': '101'
+        }
+        return examples.get(param_name.lower(), 'example_value')
+
+    def _check_auth_required(self, description):
+        """Check if authentication is mentioned in description"""
+        auth_keywords = ['auth', 'login', 'token', 'bearer', 'jwt', 'authorization', 'authenticated']
+        return any(keyword in description.lower() for keyword in auth_keywords)
+
+    def _check_rate_limited(self, description):
+        """Check if rate limiting is mentioned in description"""
+        rate_keywords = ['rate limit', 'rate-limit', 'throttle', 'limit', 'quota']
+        return any(keyword in description.lower() for keyword in rate_keywords)
 
 class DataShape:
     def __init__(self, name, description="", shape="{}"):
@@ -31,29 +96,76 @@ class DataShape:
 class GoCodeAnalyzer:
     def __init__(self):
         self.endpoints = []
+        self.stats = {
+            'files_processed': 0,
+            'endpoints_found': 0,
+            'frameworks_detected': set(),
+            'errors': []
+        }
 
     def analyze_directory(self, directory="."):
+        """Enhanced directory analysis with better error handling and file filtering"""
         if not os.path.exists(directory):
-            print(f"Directory {directory} does not exist.")
+            print(f"❌ Directory {directory} does not exist.")
+            return []
+
+        if not os.path.isdir(directory):
+            print(f"❌ {directory} is not a directory.")
             return []
 
         go_files_found = 0
+        total_files_processed = 0
 
-        # Recursive search through all subdirectories
-        for root, dirs, files in os.walk(directory):
-            for filename in files:
-                if filename.endswith(".go") and not filename.endswith("_test.go"):
-                    filepath = os.path.join(root, filename)
+        # Support for additional file extensions
+        supported_extensions = ['.go']
 
-                    # Get relative path for cleaner output
-                    rel_path = os.path.relpath(filepath, directory)
-                    print(f"Analyzing: {rel_path}")
+        # Robust recursive search with better error handling
+        try:
+            for root, dirs, files in os.walk(directory):
+                # Skip hidden directories and common excluded dirs
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', 'vendor', '_build']]
 
-                    self._analyze_file(filepath)
-                    go_files_found += 1
+                for filename in files:
+                    if any(filename.endswith(ext) for ext in supported_extensions) and not filename.endswith("_test.go"):
+                        filepath = os.path.join(root, filename)
+
+                        # Skip very large files (>10MB) to avoid memory issues
+                        try:
+                            file_size = os.path.getsize(filepath)
+                            if file_size > 10 * 1024 * 1024:  # 10MB limit
+                                print(f"⏭️ Skipping large file: {os.path.relpath(filepath, directory)} ({file_size//(1024*1024)}MB)")
+                                continue
+                        except (OSError, IOError) as e:
+                            print(f"⚠️ Cannot access file size: {os.path.relpath(filepath, directory)} - {e}")
+                            continue
+
+                        # Get relative path for cleaner output
+                        rel_path = os.path.relpath(filepath, directory)
+                        print(f"🔍 Analyzing: {rel_path}")
+
+                        try:
+                            self._analyze_file(filepath)
+                            go_files_found += 1
+                            total_files_processed += 1
+                        except Exception as e:
+                            error_msg = f"Error analyzing {rel_path}: {str(e)}"
+                            print(f"❌ {error_msg}")
+                            self.stats['errors'].append(error_msg)
+
+        except Exception as e:
+            print(f"❌ Error walking directory {directory}: {e}")
+            return []
 
         if go_files_found == 0:
-            print(f"No Go source files found in {directory}")
+            print(f"⚠️ No Go source files found in {directory}")
+            print("💡 Hint: Make sure you're in the correct directory and source files aren't in excluded folders")
+        else:
+            print(f"✅ Successfully processed {go_files_found} Go files")
+            self.stats['files_processed'] = total_files_processed
+            self.stats['endpoints_found'] = len(self.endpoints)
+
+            if self.stats['errors']:
+                print(f"⚠️ Completed with {len(self.stats['errors'])} file errors (use verbose mode for details)")
 
         return self.endpoints
 
