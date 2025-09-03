@@ -6,15 +6,73 @@ A documentation generation and parsing project.
 
 ## Features
 
-- TODO: Add project features
+- **API Documentation Generator**: Automatically generate API documentation by analyzing Go source code
+- **Web Framework Support**: Supports Gin, Echo, and net/http frameworks
+- **REST API Server**: Includes built-in HTTP server with multiple endpoints
+- **JSON Documentation Format**: Outputs clean JSON documentation with curl examples
+- **Health Check Endpoint**: Built-in health monitoring
 
 ## Getting Started
 
-- TODO: Add setup instructions
+### Prerequisites
+
+- Go 1.19 or later
+
+### Server Installation
+
+```bash
+# Navigate to the server directory
+cd server
+
+# Download dependencies
+go mod tidy
+
+# Run the documentation server
+go run main.go
+```
+
+The server will start on `http://localhost:9090`
 
 ## Usage
 
-- TODO: Add usage examples
+### API Endpoints
+
+| Endpoint | Method | Description | Example |
+|----------|--------|-------------|---------|
+| `/analyze?dir=./path/to/go/project` | POST | Generate API docs for a Go project | `curl -X POST "http://localhost:9090/analyze?dir=./server"` |
+| `/health` | GET | Health check | `curl http://localhost:9090/health` |
+| `/docs` | GET | Get this API's documentation | `curl http://localhost:9090/docs` |
+
+### CLI Usage
+
+```bash
+# Start the server
+cd server && go run main.go
+
+# The server will output available endpoints:
+# POST /analyze?dir=./path/to/go/project - Generate API docs
+# GET  /health - Health check
+# GET  /docs - This service's documentation
+```
+
+### Example Output
+
+```json
+[
+  {
+    "path": "/users",
+    "method": "GET",
+    "description": "Get all users",
+    "curl_example": "curl -X GET /users"
+  },
+  {
+    "path": "/users",
+    "method": "POST",
+    "description": "Create a new user",
+    "curl_example": "curl -X POST /users"
+  }
+]
+```
 
 ## License
 
