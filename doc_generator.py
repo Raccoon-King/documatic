@@ -77,15 +77,15 @@ class APIDocumentation:
         }
         return examples.get(param_name.lower(), 'example_value')
 
-    def _check_auth_required(self, description):
-        """Check if authentication is mentioned in description"""
+    def _check_auth_required(self, input_text):
+        """Check if authentication is mentioned in input text"""
         auth_keywords = ['auth', 'login', 'token', 'bearer', 'jwt', 'authorization', 'authenticated']
-        return any(keyword in description.lower() for keyword in auth_keywords)
+        return any(keyword in input_text.lower() for keyword in auth_keywords)
 
-    def _check_rate_limited(self, description):
-        """Check if rate limiting is mentioned in description"""
+    def _check_rate_limited(self, input_text):
+        """Check if rate limiting is mentioned in input text"""
         rate_keywords = ['rate limit', 'rate-limit', 'throttle', 'limit', 'quota']
-        return any(keyword in description.lower() for keyword in rate_keywords)
+        return any(keyword in input_text.lower() for keyword in rate_keywords)
 
 class DataShape:
     def __init__(self, name, description="", shape="{}"):
@@ -270,22 +270,42 @@ class GoCodeAnalyzer:
                     self.endpoints.append(endpoint)
 
     def _extract_mux_routes(self, content):
-        # Gorilla Mux router patterns
+        # Gorilla Mux router patterns - Enhanced with better detection
+
         # Pattern 1: r.HandleFunc("/path", handler).Methods("GET", "POST")
         mux_pattern1 = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
-        matches = re.finditer(mux_pattern1, content)
-        for match in matches:
+        matches1 = re.finditer(mux_pattern1, content)
+
+        # Pattern 2: records.HandleFunc("/path", handler).Methods(GET)
+        mux_pattern2 = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
+        matches2 = re.finditer(mux_pattern2, content)
+
+        # Combine all matches
+        all_matches = list(matches1)
+        all_matches.extend([m for m in matches2 if m.start() not in [original.start() for original in matches1]])
+
+        for match in all_matches:
             path = self._clean_string_arg(match.group(1))
             handler_func = self._clean_string_arg(match.group(2))
             methods_str = match.group(3)
 
             # Extract methods from the .Methods call
-            # This could be: "GET", "GET", "POST" or strings.Join([]string{"GET", "POST"})
-            method_matches = re.finditer(r'["\']([A-Z]+)["\']', methods_str)
+            # Handle both "GET" and GET (constants vs strings)
+            method_matches = re.finditer(r'["\']([A-Z]+)["\']|(\b[A-Z]{3,7}\b)', methods_str)
+            methods_found = []
             for method_match in method_matches:
-                method = method_match.group(1)
+                method = method_match.group(1) or method_match.group(2)
+                if method in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']:
+                    methods_found.append(method)
+
+            if not methods_found:
+                methods_found = ['GET']  # Default to GET if no specific method found
+
+            for method in methods_found:
                 if path:
                     description = self._find_function_comment(content, handler_func, match.start())
+                    if not description or description.strip() == "":
+                        description = "Router endpoint"
                     endpoint = APIDocumentation(
                         path=path,
                         method=method,
@@ -294,19 +314,29 @@ class GoCodeAnalyzer:
                     )
                     self.endpoints.append(endpoint)
 
-        # Pattern 2: r.Path("/path").HandlerFunc(handler).Methods("GET")
-        mux_pattern2 = r'\w+\.Path\s*\(\s*([^)]+)\)\s*\.HandlerFunc\s*\(\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
-        matches = re.finditer(mux_pattern2, content)
+        # Pattern 3: r.Path("/path").HandlerFunc(handler).Methods("GET")
+        mux_pattern_path = r'\w+\.Path\s*\(\s*([^)]+)\)\s*\.HandlerFunc\s*\(\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
+        matches = re.finditer(mux_pattern_path, content)
         for match in matches:
             path = self._clean_string_arg(match.group(1))
             handler_func = self._clean_string_arg(match.group(2))
             methods_str = match.group(3)
 
-            method_matches = re.finditer(r'["\']([A-Z]+)["\']', methods_str)
+            method_matches = re.finditer(r'["\']([A-Z]+)["\']|(\b[A-Z]{3,7}\b)', methods_str)
+            methods_found = []
             for method_match in method_matches:
-                method = method_match.group(1)
+                method = method_match.group(1) or method_match.group(2)
+                if method in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']:
+                    methods_found.append(method)
+
+            if not methods_found:
+                methods_found = ['GET']  # Default to GET
+
+            for method in methods_found:
                 if path:
                     description = self._find_function_comment(content, handler_func, match.start())
+                    if not description or description.strip() == "":
+                        description = "Path-handler endpoint"
                     endpoint = APIDocumentation(
                         path=path,
                         method=method,
@@ -315,27 +345,31 @@ class GoCodeAnalyzer:
                     )
                     self.endpoints.append(endpoint)
 
-        # Pattern 3: Simple HandleFunc without .Methods (defaults to all methods)
-        mux_pattern3 = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)'
-        matches = re.finditer(mux_pattern3, content)
+        # Pattern 4: HandleFunc without Methods (could be Mux without explicit methods)
+        mux_pattern_simple = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)'
+        matches = re.finditer(mux_pattern_simple, content)
         for match in matches:
-            # Skip if this is followed by .Methods (already handled above)
-            if '.Methods(' in content[match.end():match.end()+50]:
-                continue
+            # Check if the router variable looks like a Gorilla Mux router
+            router_var = content[:match.start()].strip().split('\n')[-1]
+            if '=' in router_var and ('mux.NewRouter()' in router_var or '.HandleFunc' in content[max(0, match.start()-200):match.start()]):
+                path = self._clean_string_arg(match.group(1))
+                handler_func = self._clean_string_arg(match.group(2))
 
-            path = self._clean_string_arg(match.group(1))
-            handler_func = self._clean_string_arg(match.group(2))
+                # Skip if this is followed by .Methods (already handled above)
+                if '.Methods(' in content[match.end():match.end()+50]:
+                    continue
 
-            if path:
-                # For HandleFunc without Methods, assume it's for GET requests
-                description = self._find_function_comment(content, handler_func, match.start())
-                endpoint = APIDocumentation(
-                    path=path,
-                    method="GET",
-                    description=f"{description} - Gorilla Mux HandleFunc",
-                    handler_func=handler_func
-                )
-                self.endpoints.append(endpoint)
+                if path:
+                    description = self._find_function_comment(content, handler_func, match.start())
+                    if not description or description.strip() == "":
+                        description = "Router endpoint"
+                    endpoint = APIDocumentation(
+                        path=path,
+                        method="GET",  # Default assumption for HandleFunc
+                        description=f"{description} - Gorilla Mux HandleFunc",
+                        handler_func=handler_func
+                    )
+                    self.endpoints.append(endpoint)
 
     def _extract_generic_methods(self, content):
         # Generic router patterns for other frameworks
