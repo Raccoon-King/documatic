@@ -6,72 +6,126 @@ A documentation generation and parsing project.
 
 ## Features
 
-- **API Documentation Generator**: Automatically generate API documentation by analyzing Go source code
-- **Web Framework Support**: Supports Gin, Echo, and net/http frameworks
-- **REST API Server**: Includes built-in HTTP server with multiple endpoints
-- **JSON Documentation Format**: Outputs clean JSON documentation with curl examples
-- **Health Check Endpoint**: Built-in health monitoring
+- **Go Source Code Analyzer**: Automatically parses Go source files to extract API endpoints and generate documentation
+- **Multi-Framework Support**: Native support for Gin, Echo, Gorilla Mux, and net/http frameworks
+- **Live Server Inspection**: Connect to running Go servers to capture real JSON data shapes and request/response examples
+- **Markdown Documentation**: Generate comprehensive, visually enhanced API documentation with curl examples
+- **Recursive File Scanning**: Analyze entire Go projects with automatic sub-directory discovery
+- **Self-Documenting**: Can analyze its own example Go server to demonstrate capabilities
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go 1.19 or later
+- Python 3.7+
+- Go 1.19+ (optional, for testing with live server inspection)
 
-### Server Installation
+### Installation
+
+No installation required! Just download and run:
 
 ```bash
-# Navigate to the server directory
-cd server
-
-# Download dependencies
-go mod tidy
-
-# Run the documentation server
-go run main.go
+git clone https://github.com/Raccoon-King/grabby-documatic.git
+cd grabby-documatic
+python doc_generator.py --help
 ```
-
-The server will start on `http://localhost:9090`
 
 ## Usage
 
-### API Endpoints
+### Basic Usage
 
-| Endpoint | Method | Description | Example |
-|----------|--------|-------------|---------|
-| `/analyze?dir=./path/to/go/project` | POST | Generate API docs for a Go project | `curl -X POST "http://localhost:9090/analyze?dir=./server"` |
-| `/health` | GET | Health check | `curl http://localhost:9090/health` |
-| `/docs` | GET | Get this API's documentation | `curl http://localhost:9090/docs` |
-
-### CLI Usage
+Generate API documentation from any Go project:
 
 ```bash
-# Start the server
-cd server && go run main.go
+# Analyze current directory
+python doc_generator.py .
 
-# The server will output available endpoints:
-# POST /analyze?dir=./path/to/go/project - Generate API docs
-# GET  /health - Health check
-# GET  /docs - This service's documentation
+# Analyze specific directory
+python doc_generator.py /path/to/your/go/project
+
+# Generate documentation with live server inspection
+python doc_generator.py . --inspect-server 8080
 ```
 
-### Example Output
+### Command Line Options
 
-```json
-[
-  {
-    "path": "/users",
-    "method": "GET",
-    "description": "Get all users",
-    "curl_example": "curl -X GET /users"
-  },
-  {
-    "path": "/users",
-    "method": "POST",
-    "description": "Create a new user",
-    "curl_example": "curl -X POST /users"
-  }
-]
+- `directory`: Go project directory to analyze (default: current directory)
+- `--inspect-server [port]`: Attach to running Go server on specified port for data shape inspection
+- `--no-recursive`: Disable recursive directory scanning
+
+### Example Usage
+
+```bash
+# Analyze the included example Go server
+python doc_generator.py examples/go-server
+
+# Analyze with live server data (if server is running on port 9090)
+python doc_generator.py examples/go-server --inspect-server 9090
+
+# Quick test of any Go web API
+python doc_generator.py /path/to/my/go/api --inspect-server 3000
+```
+
+## Supported Frameworks
+
+### ✅ Framework Compatibility
+
+- **Gin**: `router.GET/POST/PUT/DELETE("/path", handler)`
+- **Echo**: `e.GET/POST/PUT/DELETE("/path", handler)`
+- **Gorilla Mux**: `r.HandleFunc("/path", handler).Methods("GET")`
+- **net/http**: `http.HandleFunc("/path", handler)`
+
+### 🔧 Framework Detection
+
+The analyzer automatically detects and parses:
+- Direct router method calls
+- Group-based routing patterns
+- Handler function comments and documentation
+- Request/response data structures
+- HTTP method definitions
+
+## Output
+
+Generates comprehensive `apidocs.md` with:
+
+### 📊 Analysis Summary
+- Total endpoints discovered
+- HTTP method distribution
+- Framework usage statistics
+- Documentation coverage metrics
+
+### 🔗 Per-Endpoint Documentation
+- Complete curl examples for testing
+- HTTP method and path information
+- Handler function references
+- Auto-generated example data structures
+
+### 🎯 Live Data Inspection Results
+When connected to a running server:
+- Real JSON request/response examples
+- Actual data shape validation
+- Server compatibility verification
+
+### 📈 Example Output
+
+```markdown
+# 🚀 API Documentation
+
+## 📊 API Overview
+| Metric | Value |
+|---|---|
+| 🔗 Total Endpoints | 12 |
+| 📁 Route Groups | 3 |
+| 🔧 HTTP Methods | 4 |
+
+### HTTP Method Distribution
+🟢 GET: 8 | 🔵 POST: 2 | 🟡 PUT: 1 | 🔴 DELETE: 1
+
+## 🔧 Detailed Endpoint Documentation
+- 🟢 GET `/users` - Get all users
+- 🔵 POST `/users` - Create new user
+- 🟡 PUT `/users/{id}` - Update user
+- 🔴 DELETE `/users/{id}` - Delete user
 ```
 
 ## License
