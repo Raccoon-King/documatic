@@ -17,8 +17,6 @@ class APIDocumentation:
         self.parameters = self._extract_parameters(path)
         self.framework = "unknown"
         self.curl_example = self._generate_curl_example()
-        self.auth_required = self._check_auth_required(description)
-        self.rate_limited = self._check_rate_limited(description)
 
     def _generate_curl_example(self):
         # Generate more sophisticated curl commands
@@ -28,10 +26,6 @@ class APIDocumentation:
             example = f"curl -X {self.method} {self.path} -H \"Content-Type: application/json\" -d \"{{}}\""
         else:
             example = f"curl -X {self.method} {self.path}"
-
-        # Add auth if required
-        if self.auth_required:
-            example += " -H \"Authorization: Bearer YOUR_TOKEN\""
 
         return example
 
