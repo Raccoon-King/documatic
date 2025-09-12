@@ -125,7 +125,7 @@ class GoCodeAnalyzer:
                 dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', 'vendor', '_build']]
 
                 for filename in files:
-                    if any(filename.endswith(ext) for ext in supported_extensions) and not filename.endswith("_test.go"):
+                    if any(filename.endswith(ext) for ext in supported_extensions) and self._should_analyze_file(filename):
                         filepath = os.path.join(root, filename)
 
                         # Skip very large files (>10MB) to avoid memory issues
@@ -140,7 +140,7 @@ class GoCodeAnalyzer:
 
                         # Get relative path for cleaner output
                         rel_path = os.path.relpath(filepath, directory)
-                        print(f"🔍 Analyzing: {rel_path}")
+                        print(f"Analyzing: {rel_path}")
 
                         try:
                             self._analyze_file(filepath)
@@ -170,6 +170,27 @@ class GoCodeAnalyzer:
             self._print_duplicate_stats()
 
         return self.endpoints
+    
+    def _should_analyze_file(self, filename):
+        """Determine if a file should be analyzed (exclude tests and other non-route files)"""
+        # Skip test files
+        if filename.endswith("_test.go") or filename.endswith("test.go"):
+            return False
+        
+        # Skip common non-route files
+        excluded_patterns = [
+            "main_test.go",
+            "setup_test.go", 
+            "integration_test.go",
+            "benchmark_test.go",
+            "*_test.go"  # Catch-all for test files
+        ]
+        
+        for pattern in excluded_patterns:
+            if pattern.replace("*", "") in filename:
+                return False
+                
+        return True
     
     def _print_duplicate_stats(self):
         """Print statistics about duplicates found"""
@@ -521,106 +542,219 @@ class GoCodeAnalyzer:
                     self._add_endpoint(endpoint)
 
     def _extract_mux_routes(self, content):
-        # Gorilla Mux router patterns - Enhanced with better detection
+        """Extract Gorilla Mux routes with enhanced pattern matching including subrouters"""
+        try:
+            # First pass: Extract subrouter definitions
+            subrouters = self._extract_subrouters(content)
+            
+            # Pattern 1: r.HandleFunc("/path", handler).Methods("GET")
+            # Use a more robust approach to find HandleFunc patterns
+            handlefunc_pattern = r'(\w+)\.HandleFunc\s*\('
+            for match in re.finditer(handlefunc_pattern, content):
+                try:
+                    router_var = match.group(1)
+                    start_pos = match.end()
+                    
+                    # Find the matching closing parenthesis for HandleFunc
+                    paren_count = 1
+                    pos = start_pos
+                    handler_start = None
+                    
+                    while pos < len(content) and paren_count > 0:
+                        if content[pos] == '(':
+                            paren_count += 1
+                        elif content[pos] == ')':
+                            paren_count -= 1
+                        elif content[pos] == ',' and paren_count == 1 and handler_start is None:
+                            # Found the comma separating path from handler
+                            path = content[start_pos:pos].strip()
+                            handler_start = pos + 1
+                        pos += 1
+                    
+                    if handler_start is None:
+                        continue
+                        
+                    # Extract handler function
+                    handler_func = content[handler_start:pos-1].strip()
+                    
+                    # Look for .Methods() after the HandleFunc
+                    remaining = content[pos:pos+200]  # Look ahead
+                    methods_match = re.search(r'\.Methods\s*\(\s*([^)]+)\s*\)', remaining)
+                    if not methods_match:
+                        continue
+                        
+                    methods_str = methods_match.group(1)
+                    path = self._clean_string_arg(path)
+                    handler_func = self._clean_string_arg(handler_func)
 
-        # Pattern 1: r.HandleFunc("/path", handler).Methods("GET", "POST")
-        mux_pattern1 = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
-        matches1 = re.finditer(mux_pattern1, content)
+                    # Check if this router is a subrouter
+                    full_path = path
+                    if router_var in subrouters:
+                        full_path = subrouters[router_var] + path
+                    
+                    methods_found = self._extract_methods_from_string(methods_str)
 
-        # Pattern 2: records.HandleFunc("/path", handler).Methods(GET)
-        mux_pattern2 = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
-        matches2 = re.finditer(mux_pattern2, content)
-
-        # Combine all matches
-        all_matches = list(matches1)
-        all_matches.extend([m for m in matches2 if m.start() not in [original.start() for original in matches1]])
-
-        for match in all_matches:
-            path = self._clean_string_arg(match.group(1))
-            handler_func = self._clean_string_arg(match.group(2))
-            methods_str = match.group(3)
-
-            # Extract methods from the .Methods call
-            # Handle both "GET" and GET (constants vs strings)
-            method_matches = re.finditer(r'["\']([A-Z]+)["\']|(\b[A-Z]{3,7}\b)', methods_str)
-            methods_found = []
-            for method_match in method_matches:
-                method = method_match.group(1) or method_match.group(2)
-                if method in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']:
-                    methods_found.append(method)
-
-            if not methods_found:
-                methods_found = ['GET']  # Default to GET if no specific method found
-
-            for method in methods_found:
-                if path:
-                    description = self._find_function_comment(content, handler_func, match.start())
-                    if not description or description.strip() == "":
-                        description = "Router endpoint"
-                    endpoint = APIDocumentation(
-                        path=path,
-                        method=method,
-                        description=f"{description} - Gorilla Mux Handler",
-                        handler_func=handler_func
-                    )
-                    self._add_endpoint(endpoint)
-
-        # Pattern 3: r.Path("/path").HandlerFunc(handler).Methods("GET")
-        mux_pattern_path = r'\w+\.Path\s*\(\s*([^)]+)\)\s*\.HandlerFunc\s*\(\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
-        matches = re.finditer(mux_pattern_path, content)
-        for match in matches:
-            path = self._clean_string_arg(match.group(1))
-            handler_func = self._clean_string_arg(match.group(2))
-            methods_str = match.group(3)
-
-            method_matches = re.finditer(r'["\']([A-Z]+)["\']|(\b[A-Z]{3,7}\b)', methods_str)
-            methods_found = []
-            for method_match in method_matches:
-                method = method_match.group(1) or method_match.group(2)
-                if method in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']:
-                    methods_found.append(method)
-
-            if not methods_found:
-                methods_found = ['GET']  # Default to GET
-
-            for method in methods_found:
-                if path:
-                    description = self._find_function_comment(content, handler_func, match.start())
-                    if not description or description.strip() == "":
-                        description = "Path-handler endpoint"
-                    endpoint = APIDocumentation(
-                        path=path,
-                        method=method,
-                        description=f"{description} - Gorilla Mux Path Handler",
-                        handler_func=handler_func
-                    )
-                    self._add_endpoint(endpoint)
-
-        # Pattern 4: HandleFunc without Methods (could be Mux without explicit methods)
-        mux_pattern_simple = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)'
-        matches = re.finditer(mux_pattern_simple, content)
-        for match in matches:
-            # Check if the router variable looks like a Gorilla Mux router
-            router_var = content[:match.start()].strip().split('\n')[-1]
-            if '=' in router_var and ('mux.NewRouter()' in router_var or '.HandleFunc' in content[max(0, match.start()-200):match.start()]):
-                path = self._clean_string_arg(match.group(1))
-                handler_func = self._clean_string_arg(match.group(2))
-
-                # Skip if this is followed by .Methods (already handled above)
-                if '.Methods(' in content[match.end():match.end()+50]:
+                    for method in methods_found:
+                        if full_path:
+                            description = self._find_function_comment(content, handler_func, match.start())
+                            if not description or description.strip() == "":
+                                description = "Router endpoint"
+                            
+                            # Try to analyze handler function for more details
+                            enhanced_description = self._analyze_handler_function(content, handler_func, description)
+                            
+                            endpoint = APIDocumentation(
+                                path=full_path,
+                                method=method,
+                                description=enhanced_description,
+                                handler_func=handler_func
+                            )
+                            self._add_endpoint(endpoint)
+                except Exception as e:
+                    print(f"Warning: Error processing Mux route: {e}")
                     continue
 
-                if path:
-                    description = self._find_function_comment(content, handler_func, match.start())
-                    if not description or description.strip() == "":
-                        description = "Router endpoint"
-                    endpoint = APIDocumentation(
-                        path=path,
-                        method="GET",  # Default assumption for HandleFunc
-                        description=f"{description} - Gorilla Mux HandleFunc",
-                        handler_func=handler_func
-                    )
-                    self._add_endpoint(endpoint)
+            # Pattern 2: r.Path("/path").HandlerFunc(handler).Methods("GET")
+            mux_pattern_path = r'(\w+)\.Path\s*\(\s*([^)]+)\)\s*\.HandlerFunc\s*\(\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
+            matches = re.finditer(mux_pattern_path, content)
+            for match in matches:
+                try:
+                    router_var = match.group(1)
+                    path = self._clean_string_arg(match.group(2))
+                    handler_func = self._clean_string_arg(match.group(3))
+                    methods_str = match.group(4)
+
+                    # Check if this router is a subrouter
+                    full_path = path
+                    if router_var in subrouters:
+                        full_path = subrouters[router_var] + path
+
+                    methods_found = self._extract_methods_from_string(methods_str)
+
+                    for method in methods_found:
+                        if full_path:
+                            description = self._find_function_comment(content, handler_func, match.start())
+                            if not description or description.strip() == "":
+                                description = "Router endpoint"
+                            
+                            enhanced_description = self._analyze_handler_function(content, handler_func, description)
+                            
+                            endpoint = APIDocumentation(
+                                path=full_path,
+                                method=method,
+                                description=enhanced_description,
+                                handler_func=handler_func
+                            )
+                            self._add_endpoint(endpoint)
+                except Exception as e:
+                    print(f"Warning: Error processing Mux Path route: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error in _extract_mux_routes: {e}")
+    
+    def _extract_subrouters(self, content):
+        """Extract subrouter definitions like: records := router.PathPrefix("/records").Subrouter()"""
+        subrouters = {}
+        
+        # Pattern: varName := router.PathPrefix("/prefix").Subrouter()
+        subrouter_pattern = r'(\w+)\s*:=\s*\w+\.PathPrefix\s*\(\s*([^)]+)\)\s*\.Subrouter\s*\(\s*\)'
+        matches = re.finditer(subrouter_pattern, content)
+        
+        for match in matches:
+            var_name = match.group(1)
+            prefix = self._clean_string_arg(match.group(2))
+            if prefix:
+                # Ensure prefix doesn't end with slash unless it's root
+                prefix = prefix.rstrip('/') if prefix != '/' else prefix
+                subrouters[var_name] = prefix
+                print(f"Found subrouter: {var_name} -> {prefix}")
+        
+        return subrouters
+    
+    def _extract_methods_from_string(self, methods_str):
+        """Extract HTTP methods from a methods string"""
+        method_matches = re.finditer(r'["\']([A-Z]+)["\']|(\b[A-Z]{3,7}\b)', methods_str)
+        methods_found = []
+        for method_match in method_matches:
+            method = method_match.group(1) or method_match.group(2)
+            if method in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']:
+                methods_found.append(method)
+
+        if not methods_found:
+            methods_found = ['GET']  # Default to GET if no specific method found
+            
+        return methods_found
+    
+    def _analyze_handler_function(self, content, handler_func, base_description):
+        """Analyze handler function to extract more details for documentation"""
+        try:
+            # Handle function calls like jade.CreateNew(getAuthData, db.conn)
+            if '(' in handler_func and ')' in handler_func:
+                # Extract the main function name
+                main_func = handler_func.split('(')[0]
+                params = handler_func[handler_func.find('(')+1:handler_func.rfind(')')]
+                
+                # Look for the function definition
+                func_pattern = rf'func\s+{re.escape(main_func)}\s*\([^)]*\)\s*[^{{]*{{'
+                func_match = re.search(func_pattern, content)
+                
+                enhancements = []
+                
+                # Analyze parameters for hints about functionality
+                if 'auth' in params.lower() or 'getauth' in params.lower():
+                    enhancements.append("requires authentication")
+                if 'db' in params.lower() or 'conn' in params.lower():
+                    enhancements.append("performs database operations")
+                
+                if func_match:
+                    # Get the function body (simplified extraction)
+                    func_start = func_match.end()
+                    func_body = content[func_start:func_start+500]  # First 500 chars of function
+                    
+                    # Look for common patterns in the handler
+                    if 'json.Unmarshal' in func_body or 'json.Decoder' in func_body:
+                        enhancements.append("accepts JSON input")
+                    if 'json.Marshal' in func_body or 'json.Encoder' in func_body:
+                        enhancements.append("returns JSON response")
+                    if any(db_keyword in func_body for db_keyword in ['Insert', 'Update', 'Delete', 'Query', 'Create']):
+                        enhancements.append("modifies database")
+                    if any(val_keyword in func_body for val_keyword in ['validate', 'valid', 'check']):
+                        enhancements.append("includes input validation")
+                
+                if enhancements:
+                    return f"{base_description} - {', '.join(enhancements)}"
+                else:
+                    return f"{base_description} - calls {main_func} with parameters"
+            else:
+                # Regular function reference
+                func_pattern = rf'func\s+{re.escape(handler_func)}\s*\([^)]*\)\s*[^{{]*{{'
+                func_match = re.search(func_pattern, content)
+                
+                if func_match:
+                    func_start = func_match.end()
+                    func_body = content[func_start:func_start+500]
+                    
+                    enhancements = []
+                    if 'json.Unmarshal' in func_body or 'json.Decoder' in func_body:
+                        enhancements.append("accepts JSON input")
+                    if 'json.Marshal' in func_body or 'json.Encoder' in func_body:
+                        enhancements.append("returns JSON response")
+                    if any(db_keyword in func_body for db_keyword in ['db.', 'database', 'sql.', 'Query', 'Insert', 'Update', 'Delete']):
+                        enhancements.append("performs database operations")
+                    if any(auth_keyword in func_body for auth_keyword in ['auth', 'token', 'jwt', 'session']):
+                        enhancements.append("requires authentication")
+                    if any(val_keyword in func_body for val_keyword in ['validate', 'valid', 'check']):
+                        enhancements.append("includes input validation")
+                    
+                    if enhancements:
+                        return f"{base_description} - {', '.join(enhancements)}"
+            
+            return base_description
+            
+        except Exception as e:
+            print(f"⚠️ Error analyzing handler function {handler_func}: {e}")
+            return base_description
 
     def _extract_generic_methods(self, content):
         # Generic router patterns for other frameworks
