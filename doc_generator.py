@@ -546,11 +546,17 @@ class GoCodeAnalyzer:
         try:
             # First pass: Extract subrouter definitions
             subrouters = self._extract_subrouters(content)
+            if subrouters:
+                print(f"  -> Found {len(subrouters)} subrouters: {list(subrouters.keys())}")
             
             # Pattern 1: r.HandleFunc("/path", handler).Methods("GET")
             # Use a more robust approach to find HandleFunc patterns
             handlefunc_pattern = r'(\w+)\.HandleFunc\s*\('
-            for match in re.finditer(handlefunc_pattern, content):
+            handlefunc_matches = list(re.finditer(handlefunc_pattern, content))
+            if handlefunc_matches:
+                print(f"  -> Found {len(handlefunc_matches)} HandleFunc calls")
+            
+            for match in handlefunc_matches:
                 try:
                     router_var = match.group(1)
                     start_pos = match.end()
@@ -610,6 +616,7 @@ class GoCodeAnalyzer:
                                 handler_func=handler_func
                             )
                             self._add_endpoint(endpoint)
+                            print(f"  -> Added route: {method} {full_path}")
                 except Exception as e:
                     print(f"Warning: Error processing Mux route: {e}")
                     continue
@@ -650,6 +657,12 @@ class GoCodeAnalyzer:
                     print(f"Warning: Error processing Mux Path route: {e}")
                     continue
                     
+            
+            # Summary for this file
+            total_routes_found = len(handlefunc_matches) if 'handlefunc_matches' in locals() else 0
+            if total_routes_found == 0 and (subrouters or 'mux' in content.lower() or 'router' in content.lower()):
+                print("  -> No Mux routes detected in this file (may use different patterns)")
+                
         except Exception as e:
             print(f"Error in _extract_mux_routes: {e}")
     
