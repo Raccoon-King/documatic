@@ -90,9 +90,14 @@ class DataShape:
 class GoCodeAnalyzer:
     def __init__(self):
         self.endpoints = []
+        self.seen_endpoints = set()  # Track unique endpoints to prevent duplicates
+        self.duplicate_tracker = {}  # Track all attempts to add endpoints
+        self.duplicate_conflicts = []  # Store duplicate conflicts for reporting
         self.stats = {
             'files_processed': 0,
             'endpoints_found': 0,
+            'duplicates_found': 0,
+            'duplicates_skipped': 0,
             'frameworks_detected': set(),
             'errors': []
         }
@@ -156,17 +161,72 @@ class GoCodeAnalyzer:
         else:
             print(f"✅ Successfully processed {go_files_found} Go files")
             self.stats['files_processed'] = total_files_processed
-            self.stats['endpoints_found'] = len(self.endpoints)
-
+            # Don't overwrite endpoints_found as it's tracked during addition
+            
             if self.stats['errors']:
                 print(f"⚠️ Completed with {len(self.stats['errors'])} file errors (use verbose mode for details)")
+            
+            # Print duplicate statistics
+            self._print_duplicate_stats()
 
         return self.endpoints
+    
+    def _print_duplicate_stats(self):
+        """Print statistics about duplicates found"""
+        if self.stats['duplicates_found'] > 0:
+            print(f"\n📊 Duplicate Analysis:")
+            print(f"   • Unique endpoints: {self.stats['endpoints_found']}")
+            print(f"   • Duplicates detected: {self.stats['duplicates_found']}")
+            print(f"   • Duplicates skipped: {self.stats['duplicates_skipped']}")
+            
+            if self.duplicate_conflicts:
+                print(f"   • Conflicts resolved: {len(self.duplicate_conflicts)}")
+                
+                # Group by resolution type
+                resolutions = {}
+                for conflict in self.duplicate_conflicts:
+                    res_type = conflict['resolution']
+                    resolutions[res_type] = resolutions.get(res_type, 0) + 1
+                
+                for res_type, count in resolutions.items():
+                    print(f"     - {res_type.replace('_', ' ').title()}: {count}")
+        else:
+            print(f"✅ No duplicate endpoints detected")
+    
+    def generate_duplicate_report(self):
+        """Generate detailed duplicate report"""
+        if not self.duplicate_conflicts:
+            return "No duplicate endpoints detected.\n"
+        
+        report = "# Duplicate Endpoints Report\n\n"
+        report += f"Found {len(self.duplicate_conflicts)} duplicate conflicts:\n\n"
+        
+        for i, conflict in enumerate(self.duplicate_conflicts, 1):
+            report += f"## Conflict {i}: {conflict['method']} {conflict['path']}\n\n"
+            report += f"**Existing:** `{conflict['existing']['handler']}` in `{conflict['existing']['file']}`\n"
+            if conflict['existing']['description']:
+                report += f"- Description: {conflict['existing']['description']}\n"
+            
+            report += f"**New:** `{conflict['new']['handler']}` in `{conflict['new']['file']}`\n"
+            if conflict['new']['description']:
+                report += f"- Description: {conflict['new']['description']}\n"
+            
+            report += f"**Resolution:** {conflict['resolution'].replace('_', ' ').title()}\n\n"
+            report += "---\n\n"
+        
+        return report
 
     def _analyze_file(self, filepath):
         try:
+            # Set current file for duplicate tracking
+            self.current_file = os.path.basename(filepath)
+            
             with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
+                original_content = f.read()
+                # Keep original content for comment extraction
+                self.original_content = original_content
+                # Remove comments to prevent matching commented-out code
+                content = self._remove_comments(original_content)
                 self._extract_http_handlefunc(content)
                 self._extract_gin_routes(content)
                 self._extract_echo_routes(content)
@@ -174,25 +234,214 @@ class GoCodeAnalyzer:
                 self._extract_generic_methods(content)
         except Exception as e:
             print(f"Error analyzing {filepath}: {e}")
+        finally:
+            self.current_file = None
+
+    def _remove_comments(self, content):
+        """Remove Go-style comments to prevent matching commented code"""
+        # More efficient comment removal using compiled regex
+        if not hasattr(self, '_comment_patterns'):
+            self._comment_patterns = [
+                re.compile(r'//.*?$', re.MULTILINE),  # Single-line comments
+                re.compile(r'/\*.*?\*/', re.DOTALL)    # Multi-line comments
+            ]
+        
+        for pattern in self._comment_patterns:
+            content = pattern.sub('', content)
+        
+        return content
+
+    def _add_endpoint(self, endpoint):
+        """Add endpoint if it's not a duplicate and passes validation"""
+        # Validate endpoint
+        if not self._validate_endpoint(endpoint):
+            return
+            
+        endpoint_key = (endpoint.method, endpoint.path)
+        
+        # Track all attempts to add endpoints
+        if endpoint_key not in self.duplicate_tracker:
+            self.duplicate_tracker[endpoint_key] = []
+        
+        self.duplicate_tracker[endpoint_key].append({
+            'endpoint': endpoint,
+            'handler': endpoint.handler_func,
+            'description': endpoint.description,
+            'file': getattr(self, 'current_file', 'unknown')
+        })
+        
+        # Check for duplicates
+        if endpoint_key in self.seen_endpoints:
+            self.stats['duplicates_found'] += 1
+            self._handle_duplicate_endpoint(endpoint_key, endpoint)
+            return
+        
+        # Add new endpoint
+        self.seen_endpoints.add(endpoint_key)
+        self.endpoints.append(endpoint)
+        self.stats['endpoints_found'] += 1
+            
+    def _validate_endpoint(self, endpoint):
+        """Validate endpoint data"""
+        if not endpoint:
+            return False
+            
+        # Validate path
+        if not endpoint.path or not isinstance(endpoint.path, str):
+            return False
+            
+        # Normalize and validate path
+        endpoint.path = self._normalize_path(endpoint.path)
+        if not endpoint.path.startswith('/'):
+            return False
+            
+        # Path should not be too long (reasonable limit)
+        if len(endpoint.path) > 500:
+            return False
+            
+        # Validate method
+        valid_methods = {'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'}
+        if endpoint.method not in valid_methods:
+            return False
+            
+        # Sanitize description to prevent XSS in generated docs
+        if endpoint.description:
+            # Remove potential HTML/script tags
+            endpoint.description = re.sub(r'<[^>]*>', '', endpoint.description)
+            # Limit description length
+            if len(endpoint.description) > 1000:
+                endpoint.description = endpoint.description[:1000] + '...'
+                
+        return True
+        
+    def _normalize_path(self, path):
+        """Normalize API path"""
+        if not path:
+            return ""
+            
+        # Remove extra whitespace
+        path = path.strip()
+        
+        # Ensure path starts with /
+        if not path.startswith('/'):
+            path = '/' + path
+            
+        # Remove duplicate slashes
+        path = re.sub(r'/+', '/', path)
+        
+        # Remove trailing slash unless it's the root path
+        if len(path) > 1 and path.endswith('/'):
+            path = path.rstrip('/')
+            
+        return path
+    
+    def _handle_duplicate_endpoint(self, endpoint_key, new_endpoint):
+        """Handle duplicate endpoint detection and resolution"""
+        method, path = endpoint_key
+        existing_attempts = self.duplicate_tracker[endpoint_key]
+        
+        # Find the existing endpoint in our endpoints list
+        existing_endpoint = None
+        for ep in self.endpoints:
+            if ep.method == method and ep.path == path:
+                existing_endpoint = ep
+                break
+        
+        if existing_endpoint:
+            # Create conflict record
+            conflict = {
+                'method': method,
+                'path': path,
+                'existing': {
+                    'handler': existing_endpoint.handler_func,
+                    'description': existing_endpoint.description,
+                    'file': existing_attempts[0]['file'] if existing_attempts else 'unknown'
+                },
+                'new': {
+                    'handler': new_endpoint.handler_func,
+                    'description': new_endpoint.description,
+                    'file': getattr(self, 'current_file', 'unknown')
+                },
+                'resolution': 'kept_first'  # Default resolution strategy
+            }
+            
+            # Apply conflict resolution strategy
+            resolution = self._resolve_duplicate_conflict(existing_endpoint, new_endpoint, conflict)
+            conflict['resolution'] = resolution
+            
+            if resolution == 'replace_with_new':
+                # Replace existing endpoint with new one
+                for i, ep in enumerate(self.endpoints):
+                    if ep.method == method and ep.path == path:
+                        self.endpoints[i] = new_endpoint
+                        conflict['resolution'] = 'replaced_with_new'
+                        break
+            elif resolution == 'merge_descriptions':
+                # Merge descriptions from both endpoints
+                if new_endpoint.description and new_endpoint.description not in existing_endpoint.description:
+                    existing_endpoint.description += f" | {new_endpoint.description}"
+                    conflict['resolution'] = 'descriptions_merged'
+            
+            self.duplicate_conflicts.append(conflict)
+            self.stats['duplicates_skipped'] += 1
+            
+            # Print warning
+            print(f"⚠️ Duplicate endpoint: {method} {path}")
+            print(f"   Existing: {existing_endpoint.handler_func} (in {conflict['existing']['file']})")
+            print(f"   New: {new_endpoint.handler_func} (in {conflict['new']['file']})")
+            print(f"   Resolution: {resolution}")
+    
+    def _resolve_duplicate_conflict(self, existing, new, conflict):
+        """Determine how to resolve duplicate endpoint conflicts"""
+        # Strategy 1: If new endpoint has better description, consider replacing
+        if new.description and len(new.description) > len(existing.description or ''):
+            if len(new.description) > 10:  # Meaningful description
+                return 'replace_with_new'
+        
+        # Strategy 2: If handlers are different but similar path, merge descriptions
+        if (existing.handler_func != new.handler_func and 
+            existing.description and new.description):
+            return 'merge_descriptions'
+        
+        # Strategy 3: If same handler in different files, might be legitimate
+        if existing.handler_func == new.handler_func:
+            return 'kept_first'  # Keep first occurrence
+        
+        # Default: Keep first endpoint found
+        return 'kept_first'
 
     def _extract_http_handlefunc(self, content):
-        # Find http.HandleFunc calls
-        handle_func_matches = re.finditer(r'http\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)', content)
-        for match in handle_func_matches:
-            path = self._clean_string_arg(match.group(1))
-            handler_func = self._clean_string_arg(match.group(2))
+        # Find http.HandleFunc calls with more precise regex
+        try:
+            handle_func_pattern = r'http\.HandleFunc\s*\(\s*(["\'][^"\']*["\']|\`[^\`]*\`)\s*,\s*([^,)]+)\)'
+            handle_func_matches = re.finditer(handle_func_pattern, content)
+            
+            for match in handle_func_matches:
+                try:
+                    path = self._clean_string_arg(match.group(1))
+                    handler_func = self._clean_string_arg(match.group(2))
 
-            # Look for comments above the call
-            description = self._find_function_comment(content, handler_func, match.start())
+                    # Validate path
+                    if not path or not path.startswith('/'):
+                        continue
+                        
+                    # Look for comments above the call
+                    description = self._find_function_comment(content, handler_func, match.start())
 
-            if path:
-                endpoint = APIDocumentation(
-                    path=path,
-                    method="GET",  # HandleFunc typically handles GET
-                    description=description,
-                    handler_func=handler_func
-                )
-                self.endpoints.append(endpoint)
+                    if path and handler_func:
+                        endpoint = APIDocumentation(
+                            path=path,
+                            method="GET",  # HandleFunc typically handles GET
+                            description=description,
+                            handler_func=handler_func
+                        )
+                        self._add_endpoint(endpoint)
+                except Exception as e:
+                    print(f"⚠️ Error processing HandleFunc match: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"⚠️ Error in _extract_http_handlefunc: {e}")
 
     def _extract_gin_routes(self, content):
         # Gin router patterns: router.GET, router.POST, etc.
@@ -204,22 +453,30 @@ class GoCodeAnalyzer:
         # Direct method calls: router.GET("/users", handler)
 
         for method in methods:
-            # Direct method calls
-            pattern = rf'\w+\.{method}\s*\(\s*([^,]+)\s*,\s*([^)]+)\)'
-            matches = re.finditer(pattern, content)
-            for match in matches:
-                path = self._clean_string_arg(match.group(1))
-                handler_func = self._clean_string_arg(match.group(2))
+            try:
+                # Direct method calls with better regex
+                pattern = rf'\w+\.{method}\s*\(\s*(["\'][^"\']*["\']|\`[^\`]*\`)\s*,\s*([^,)]+)\)'
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    try:
+                        path = self._clean_string_arg(match.group(1))
+                        handler_func = self._clean_string_arg(match.group(2))
 
-                if path:
-                    description = self._find_function_comment(content, handler_func, match.start())
-                    endpoint = APIDocumentation(
-                        path=path,
-                        method=method,
-                        description=description,
-                        handler_func=handler_func
-                    )
-                    self.endpoints.append(endpoint)
+                        # Validate path
+                        if path and path.startswith('/') and handler_func:
+                            description = self._find_function_comment(content, handler_func, match.start())
+                            endpoint = APIDocumentation(
+                                path=path,
+                                method=method,
+                                description=description,
+                                handler_func=handler_func
+                            )
+                            self._add_endpoint(endpoint)
+                    except Exception as e:
+                        print(f"⚠️ Error processing {method} route: {e}")
+                        continue
+            except Exception as e:
+                print(f"⚠️ Error processing {method} routes: {e}")
 
             # Handle method calls: router.Handle("GET", "/path", handler)
             pattern = rf'\w+\.Handle\s*\(\s*["\']({method})["\']\s*,\s*([^,]+)\s*,\s*([^)]+)\)'
@@ -237,7 +494,7 @@ class GoCodeAnalyzer:
                         description=description,
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
     def _extract_echo_routes(self, content):
         # Echo router patterns: e.GET, e.POST, etc.
@@ -261,7 +518,7 @@ class GoCodeAnalyzer:
                         description=description,
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
     def _extract_mux_routes(self, content):
         # Gorilla Mux router patterns - Enhanced with better detection
@@ -306,7 +563,7 @@ class GoCodeAnalyzer:
                         description=f"{description} - Gorilla Mux Handler",
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
         # Pattern 3: r.Path("/path").HandlerFunc(handler).Methods("GET")
         mux_pattern_path = r'\w+\.Path\s*\(\s*([^)]+)\)\s*\.HandlerFunc\s*\(\s*([^)]+)\)\s*\.Methods\s*\(\s*([^)]+)\s*\)'
@@ -337,7 +594,7 @@ class GoCodeAnalyzer:
                         description=f"{description} - Gorilla Mux Path Handler",
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
         # Pattern 4: HandleFunc without Methods (could be Mux without explicit methods)
         mux_pattern_simple = r'\w+\.HandleFunc\s*\(\s*([^,]+)\s*,\s*([^)]+)\)'
@@ -363,7 +620,7 @@ class GoCodeAnalyzer:
                         description=f"{description} - Gorilla Mux HandleFunc",
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
     def _extract_generic_methods(self, content):
         # Generic router patterns for other frameworks
@@ -387,30 +644,54 @@ class GoCodeAnalyzer:
                         description=description,
                         handler_func=handler_func
                     )
-                    self.endpoints.append(endpoint)
+                    self._add_endpoint(endpoint)
 
     def _clean_string_arg(self, arg):
         """Clean and extract string literals from Go code"""
+        if not arg:
+            return ""
+            
         arg = arg.strip()
-        # Remove quotes if present
-        if (arg.startswith('"') and arg.endswith('"')) or \
-           (arg.startswith("'") and arg.endswith("'")):
+        
+        # Handle quoted strings (double or single quotes)
+        if len(arg) >= 2:
+            if (arg.startswith('"') and arg.endswith('"')) or \
+               (arg.startswith("'") and arg.endswith("'")):
+                # Remove outer quotes and handle escaped quotes
+                inner = arg[1:-1]
+                # Unescape common escape sequences
+                inner = inner.replace('\\"', '"').replace("\\'", "'")
+                inner = inner.replace('\\n', '\n').replace('\\t', '\t')
+                return inner
+                
+        # Handle backtick strings (Go raw strings)
+        if arg.startswith('`') and arg.endswith('`') and len(arg) >= 2:
             return arg[1:-1]
+            
         return arg
 
     def _find_function_comment(self, content, func_name, call_position):
-        """Find comments for a function"""
+        """Find comments for a function using original content with comments"""
+        # Use original content to preserve comments
+        if hasattr(self, 'original_content') and self.original_content:
+            content = self.original_content
+        
         lines = content[:call_position].split('\n')
         comment_lines = []
 
-        for line in reversed(lines):
+        # Look backwards from the call position
+        for line in reversed(lines[-10:]):  # Only check last 10 lines for performance
             line = line.strip()
             if line.startswith('//'):
-                comment_lines.insert(0, line[2:].strip())
+                comment_text = line[2:].strip()
+                # Skip empty comments or comments that look like code
+                if comment_text and not any(keyword in comment_text.lower() 
+                                          for keyword in ['http.', 'router.', 'func(']):
+                    comment_lines.insert(0, comment_text)
             elif line.startswith('func') and func_name in line:
                 break
-            elif line and not line.startswith('//'):
-                # Stop if we hit non-comment, non-empty code
+            elif line and not line.startswith('//') and comment_lines:
+                # Stop if we hit non-comment code after finding comments
                 break
 
         if comment_lines:
@@ -776,75 +1057,265 @@ def generate_markdown_docs(endpoints, output_file="apidocs.md"):
         f.write("*🤖 Last updated: " + datetime.now().strftime('%A, %B %d, %Y at %I:%M %p') + "*\n")
         f.write("")
 
-def main():
-    import argparse
+def print_ascii_art():
+    """Print ASCII art logo for Grabby Documatic"""
+    # Main title
+    title = r"""
+ ██████╗ ██████╗  █████╗ ██████╗ ██████╗ ██╗   ██╗
+██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+██║  ███╗██████╔╝███████║██████╔╝██████╔╝ ╚████╔╝ 
+██║   ██║██╔══██╗██╔══██║██╔══██╗██╔══██╗  ╚██╔╝  
+╚██████╔╝██║  ██║██║  ██║██████╔╝██████╔╝   ██║   
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═════╝    ╚═╝   
+                                                   
+██████╗  ██████╗  ██████╗██╗   ██╗███╗   ███╗ █████╗ ████████╗██╗ ██████╗
+██╔══██╗██╔═══██╗██╔════╝██║   ██║████╗ ████║██╔══██╗╚══██╔══╝██║██╔════╝
+██║  ██║██║   ██║██║     ██║   ██║██╔████╔██║███████║   ██║   ██║██║     
+██║  ██║██║   ██║██║     ██║   ██║██║╚██╔╝██║██╔══██║   ██║   ██║██║     
+██████╔╝╚██████╔╝╚██████╗╚██████╔╝██║ ╚═╝ ██║██║  ██║   ██║   ██║╚██████╗
+╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝
+    """
+    
+    print(title)
+    print("🦝 Your Friendly Go API Documentation Generator 📚")
+    print("=" * 70)
 
-    parser = argparse.ArgumentParser(description='Go Code API Documentation Generator')
-    parser.add_argument('directory', nargs='?', default='.', help='Directory to analyze (default: current directory)')
-    parser.add_argument('--inspect-server', nargs='?', const=True, metavar='port', type=int,
-                       help='Attach to running server on specified port and inspect data shapes (port required)')
-    parser.add_argument('--no-recursive', action='store_true', help='Disable recursive directory scanning')
-
-    args = parser.parse_args()
-
-    print("🚀 Go Code API Documentation Generator")
-    print(f"📂 Analyzing directory: {args.directory}")
-    if args.inspect_server:
-        print("🔬 Server inspection: ENABLED")
-    if args.no_recursive:
-        print("📁 Recursive scanning: DISABLED")
-    print("-" * 55)
-
-    # Analyze the Go code
-    analyzer = GoCodeAnalyzer()
-    analyzer.enable_recursive = not args.no_recursive
-
-    endpoints = analyzer.analyze_directory(args.directory)
-
-    if endpoints:
-        # Try to attach to running server if requested
-        if args.inspect_server:
-            inspector = DataInspector()
-
-            # Server port is required when --inspect-server is used
-            server_found = inspector.find_running_server(args.inspect_server)
-
-            if server_found:
-                # Get actual data shapes from running server
-                inspector.get_endpoint_data(endpoints)
-                print("🎯 Server data inspection completed!")
-
-        # Generate documentation with enhanced data shapes
-        generate_markdown_docs(endpoints, "apidocs.md")
-        print(f"✓ Generated apidocs.md with {len(endpoints)} endpoints")
-
-        if args.inspect_server and inspector.server_found:
-            inspected_count = sum(1 for ep in endpoints if ep.data_shapes)
-            print(f"✅ Enhanced with real data shapes: {inspected_count} endpoints")
-
-        print("✓ Documentation saved to apidocs.md")
+def print_mascot(style="working"):
+    """Print simple raccoon emoji messages"""
+    messages = {
+        "working": "🦝 Working hard on your docs! ☕",
+        "success": "🦝 Documentation ready! 🎉",
+        "analyzing": "🦝 Analyzing your Go code... 🔍",
+        "duplicate": "🦝 Found duplicates! ⚠️",
+        "goodbye": "🦝 Thanks for using Grabby-Documatic! 👋"
+    }
+    
+    if style in messages:
+        print(f"\n{messages[style]}\n")
     else:
-        print("⚠️ No API endpoints found in the Go files.")
-        return
+        print(f"\n{messages['working']}\n")
 
-    # Print enhanced summary
+def display_main_menu():
+    """Display the main menu options"""
+    print("\n📋 What would you like to do?")
+    print("1. 📁 Analyze Go project directory")
+    print("2. 🔬 Analyze with live server inspection")
+    print("3. 📊 Generate duplicate endpoints report")
+    print("4. ⚙️  Advanced settings")
+    print("5. ❓ Help & Info")
+    print("6. 🚪 Exit")
+    return input("\nSelect an option (1-6): ").strip()
+
+def get_directory_input():
+    """Get directory input from user"""
+    print("\n📂 Directory Selection:")
+    print("Press Enter for current directory, or enter in the full path:")
+    directory = input("Directory path [current]: ").strip()
+    return directory if directory else "."
+
+def get_server_port():
+    """Get server port for inspection"""
+    while True:
+        print("\n🔬 Server Inspection Setup:")
+        port_input = input("Enter server port (press Enter to skip): ").strip()
+        
+        if not port_input:
+            return None
+            
+        try:
+            port = int(port_input)
+            if 1 <= port <= 65535:
+                return port
+            else:
+                print("❌ Port must be between 1 and 65535")
+        except ValueError:
+            print("❌ Please enter a valid port number")
+
+def confirm_action(message):
+    """Get yes/no confirmation from user"""
+    while True:
+        response = input(f"{message} (y/n): ").strip().lower()
+        if response in ['y', 'yes']:
+            return True
+        elif response in ['n', 'no']:
+            return False
+        else:
+            print("Please enter 'y' or 'n'")
+
+def display_settings_menu():
+    """Display advanced settings menu"""
+    print("\n⚙️ Advanced Settings:")
+    print("1. 🔄 Toggle recursive directory scanning")
+    print("2. 📝 Configure duplicate resolution strategy")
+    print("3. 🎯 Set output file names")
+    print("4. 🔙 Back to main menu")
+    return input("Select setting (1-4): ").strip()
+
+def run_analysis(directory, config, server_port=None):
+    """Run the main analysis with given parameters"""
+    print_mascot("analyzing")
+    print(f"\n🔍 Starting analysis of: {directory}")
+    print("-" * 50)
+    
+    # Create analyzer
+    analyzer = GoCodeAnalyzer()
+    analyzer.enable_recursive = config['recursive']
+    
+    # Run analysis
+    endpoints = analyzer.analyze_directory(directory)
+    
+    if not endpoints:
+        print("⚠️ No API endpoints found in the Go files.")
+        return None
+    
+    # Server inspection if requested
+    inspector = None
+    if server_port:
+        print(f"\n🔬 Attempting to connect to server on port {server_port}...")
+        inspector = DataInspector()
+        server_found = inspector.find_running_server(server_port)
+        
+        if server_found:
+            inspector.get_endpoint_data(endpoints)
+            print("✅ Server data inspection completed!")
+        else:
+            print("❌ Could not connect to server")
+    
+    # Generate documentation
+    generate_markdown_docs(endpoints, config['output_file'])
+    print(f"✅ Generated {config['output_file']} with {len(endpoints)} endpoints")
+    
+    # Generate duplicate report if there were conflicts
+    if analyzer.duplicate_conflicts:
+        print_mascot("duplicate")
+        duplicate_report = analyzer.generate_duplicate_report()
+        with open(config['duplicate_report_file'], "w", encoding="utf-8") as f:
+            f.write(duplicate_report)
+        print(f"📊 Duplicate report saved to {config['duplicate_report_file']}")
+    
+    # Show success mascot
+    print_mascot("success")
+    
+    # Print summary
     method_counts = {}
     for endpoint in endpoints:
         method_counts[endpoint.method] = method_counts.get(endpoint.method, 0) + 1
-
+    
     if method_counts:
         print("\n📊 Analysis Summary:")
         for method, count in sorted(method_counts.items()):
-            print(f"  {method}: {count} endpoints")
+            print(f"   {method}: {count} endpoints")
+    
+    # Server inspection stats
+    if inspector and inspector.server_found:
+        inspected_endpoints = sum(1 for ep in endpoints if len(ep.data_shapes) > 0)
+        print(f"\n🔬 Server Inspection Results:")
+        print(f"   📶 Server URL: {inspector.base_url}")
+        print(f"   🎯 Inspected: {inspected_endpoints}/{len(endpoints)} endpoints")
+    
+    return endpoints
 
-    # Show inspection stats if enabled
-    if args.inspect_server and 'inspector' in locals():
-        if inspector.server_found:
-            inspected_endpoints = sum(1 for ep in endpoints if len(ep.data_shapes) > 0)
-            print(f"\n🔬 Server Inspection Stats:")
-            print(f"  📶 Server URL: {inspector.base_url}")
-            print(f"  🎯 Inspected Endpoints: {inspected_endpoints}/{len(endpoints)}")
-            print(f"  📊 Data Shapes Captured: {sum(len(ep.data_shapes) for ep in endpoints)}")
+def show_help():
+    """Display help information"""
+    print("\n❓ Help & Information:")
+    print("=" * 40)
+    print("🎯 Purpose: Generate comprehensive API documentation from Go source code")
+    print("📁 Supported frameworks: Gin, Echo, Gorilla Mux, net/http")
+    print("🔍 Features:")
+    print("   • Automatic endpoint discovery")
+    print("   • Duplicate detection and resolution")
+    print("   • Live server data inspection")
+    print("   • Recursive directory scanning")
+    print("   • Comprehensive markdown documentation")
+    print("\n💡 Tips:")
+    print("   • Ensure your Go files are in the selected directory")
+    print("   • For server inspection, make sure your server is running")
+    print("   • Check generated files for documentation results")
+    
+def main():
+    # Configuration state
+    config = {
+        'recursive': True,
+        'duplicate_strategy': 'keep_first',
+        'output_file': 'apidocs.md',
+        'duplicate_report_file': 'duplicates_report.md'
+    }
+    
+    # Clear screen and show ASCII art
+    print("\033[2J\033[H", end="")  # Clear screen
+    print_ascii_art()
+    
+    while True:
+        choice = display_main_menu()
+        
+        if choice == '1':  # Analyze directory
+            directory = get_directory_input()
+            if confirm_action(f"📁 Analyze directory '{directory}'?"):
+                run_analysis(directory, config)
+                input("\nPress Enter to continue...")
+                
+        elif choice == '2':  # Analyze with server inspection
+            directory = get_directory_input()
+            port = get_server_port()
+            if port and confirm_action(f"🔬 Analyze '{directory}' with server inspection on port {port}?"):
+                run_analysis(directory, config, port)
+                input("\nPress Enter to continue...")
+                
+        elif choice == '3':  # Generate duplicate report only
+            directory = get_directory_input()
+            if confirm_action(f"📊 Generate duplicate report for '{directory}'?"):
+                analyzer = GoCodeAnalyzer()
+                analyzer.analyze_directory(directory)
+                duplicate_report = analyzer.generate_duplicate_report()
+                with open(config['duplicate_report_file'], "w", encoding="utf-8") as f:
+                    f.write(duplicate_report)
+                print(f"✅ Duplicate report saved to {config['duplicate_report_file']}")
+                input("\nPress Enter to continue...")
+                
+        elif choice == '4':  # Settings
+            settings_choice = display_settings_menu()
+            
+            if settings_choice == '1':  # Toggle recursive
+                config['recursive'] = not config['recursive']
+                status = "ENABLED" if config['recursive'] else "DISABLED"
+                print(f"🔄 Recursive scanning: {status}")
+                
+            elif settings_choice == '2':  # Duplicate strategy
+                print(f"\n📝 Current strategy: {config['duplicate_strategy']}")
+                print("Available strategies:")
+                print("1. keep_first - Keep first occurrence")
+                print("2. replace_with_new - Replace with newer/better description")
+                print("3. merge_descriptions - Combine descriptions")
+                choice = input("Select (1-3): ").strip()
+                strategies = {'1': 'keep_first', '2': 'replace_with_new', '3': 'merge_descriptions'}
+                if choice in strategies:
+                    config['duplicate_strategy'] = strategies[choice]
+                    print(f"✅ Strategy updated to: {config['duplicate_strategy']}")
+                    
+            elif settings_choice == '3':  # Output files
+                new_output = input(f"Output file [{config['output_file']}]: ").strip()
+                if new_output:
+                    config['output_file'] = new_output
+                new_dup_output = input(f"Duplicate report file [{config['duplicate_report_file']}]: ").strip()
+                if new_dup_output:
+                    config['duplicate_report_file'] = new_dup_output
+                print("✅ Output files updated")
+                
+            input("Press Enter to continue...")
+                
+        elif choice == '5':  # Help
+            show_help()
+            input("\nPress Enter to continue...")
+            
+        elif choice == '6':  # Exit
+            print_mascot("goodbye")
+            print("\n👋 Thank you for using Grabby Documatic!")
+            print("📚 Happy documenting!")
+            break
+            
+        else:
+            print("❌ Invalid option. Please select 1-6.")
+            input("Press Enter to continue...")
 
 if __name__ == "__main__":
     main()

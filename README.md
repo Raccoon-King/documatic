@@ -1,132 +1,305 @@
 # Grabby-Documatic
 
-Version 1.0
+```
+ ██████╗ ██████╗  █████╗ ██████╗ ██████╗ ██╗   ██╗
+██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+██║  ███╗██████╔╝███████║██████╔╝██████╔╝ ╚████╔╝ 
+██║   ██║██╔══██╗██╔══██║██╔══██╗██╔══██╗  ╚██╔╝  
+╚██████╔╝██║  ██║██║  ██║██████╔╝██████╔╝   ██║   
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═════╝    ╚═╝   
+                                                   
+██████╗  ██████╗  ██████╗██╗   ██╗███╗   ███╗ █████╗ ████████╗██╗ ██████╗
+██╔══██╗██╔═══██╗██╔════╝██║   ██║████╗ ████║██╔══██╗╚══██╔══╝██║██╔════╝
+██║  ██║██║   ██║██║     ██║   ██║██╔████╔██║███████║   ██║   ██║██║     
+██║  ██║██║   ██║██║     ██║   ██║██║╚██╔╝██║██╔══██║   ██║   ██║██║     
+██████╔╝╚██████╔╝╚██████╗╚██████╔╝██║ ╚═╝ ██║██║  ██║   ██║   ██║╚██████╗
+╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝
+```
 
-A documentation generation and parsing project.
+**Version 2.0** - 🚀 Your Go API Documentation Generator 📚
 
-## Features
+An intelligent, interactive documentation generation system for Go web APIs with advanced duplicate detection and conflict resolution.
 
-- **Go Source Code Analyzer**: Automatically parses Go source files to extract API endpoints and generate documentation
-- **Multi-Framework Support**: Native support for Gin, Echo, Gorilla Mux, and net/http frameworks
-- **Live Server Inspection**: Connect to running Go servers to capture real JSON data shapes and request/response examples
-- **Markdown Documentation**: Generate comprehensive, visually enhanced API documentation with curl examples
-- **Recursive File Scanning**: Analyze entire Go projects with automatic sub-directory discovery
-- **Self-Documenting**: Can analyze its own example Go server to demonstrate capabilities
+## ✨ New Features (v2.0)
 
-## Getting Started
+### 🎯 **Interactive Menu System**
+- Beautiful ASCII art interface
+- Guided step-by-step process
+- No command-line arguments needed
+- User-friendly prompts and confirmations
+
+### 🔍 **Advanced Duplicate Detection**
+- **Smart Conflict Resolution**: Multiple strategies for handling duplicate endpoints
+- **Detailed Reporting**: Comprehensive duplicate analysis with resolution breakdowns  
+- **Real-time Feedback**: Immediate alerts when conflicts are detected
+- **File Tracking**: Know exactly which files contain which endpoints
+
+### 🛡️ **Enhanced Security & Validation**
+- Input sanitization and validation
+- XSS prevention in generated documentation
+- Path normalization and security checks
+- Robust error handling with graceful degradation
+
+### ⚡ **Performance Optimizations**
+- Compiled regex patterns for faster processing
+- Improved memory usage
+- Enhanced comment filtering
+- Better file parsing with encoding detection
+
+## 🚀 Core Features
+
+- **🔧 Multi-Framework Support**: Gin, Echo, Gorilla Mux, net/http
+- **📡 Live Server Inspection**: Real-time API data shape capture
+- **🎨 Beautiful Documentation**: Visually enhanced markdown with emojis and styling
+- **🔄 Recursive Scanning**: Automatic sub-directory discovery
+- **📊 Statistical Analysis**: Detailed metrics and summaries
+- **🎯 Endpoint Validation**: Comprehensive endpoint verification
+
+## 🚦 Getting Started
 
 ### Prerequisites
 
-- Python 3.7+
-- Go 1.19+ (optional, for testing with live server inspection)
+- **Python 3.7+** (Required)
+- **Go 1.19+** (Optional, for live server inspection)
 
-### Installation
-
-No installation required! Just download and run:
+### Quick Start
 
 ```bash
+# Clone the repository
 git clone https://github.com/Raccoon-King/grabby-documatic.git
 cd grabby-documatic
-python doc_generator.py --help
+
+# Run the interactive menu
+python doc_generator.py
 ```
 
-## Usage
+That's it! The interactive menu will guide you through the rest.
 
-### Basic Usage
+## 📖 Usage
 
-Generate API documentation from any Go project:
+### Interactive Menu Options
 
-```bash
-# Analyze current directory
-python doc_generator.py .
+When you run `python doc_generator.py`, you'll see:
 
-# Analyze specific directory
-python doc_generator.py /path/to/your/go/project
-
-# Generate documentation with live server inspection
-python doc_generator.py . --inspect-server 8080
+```
+📋 What would you like to do?
+1. 📁 Analyze Go project directory
+2. 🔬 Analyze with live server inspection  
+3. 📊 Generate duplicate endpoints report
+4. ⚙️ Advanced settings
+5. ❓ Help & Info
+6. 🚪 Exit
 ```
 
-### Command Line Options
+### Quick Examples
 
-- `directory`: Go project directory to analyze (default: current directory)
-- `--inspect-server [port]`: Attach to running Go server on specified port for data shape inspection
-- `--no-recursive`: Disable recursive directory scanning
+#### Basic Analysis
+1. Run `python doc_generator.py`
+2. Select option `1` (Analyze Go project directory)
+3. Enter your project path or press Enter for current directory
+4. Confirm the analysis
+5. View the generated `apidocs.md`
 
-### Example Usage
+#### Live Server Inspection
+1. Start your Go server (e.g., on port 8080)
+2. Run `python doc_generator.py`
+3. Select option `2` (Analyze with live server inspection)
+4. Enter your project directory
+5. Enter server port (8080)
+6. Get enhanced documentation with real API responses!
 
-```bash
-# Analyze the included example Go server
-python doc_generator.py examples/go-server
+#### Duplicate Analysis
+1. Run `python doc_generator.py`  
+2. Select option `3` (Generate duplicate endpoints report)
+3. Check the generated `duplicates_report.md` for detailed conflict analysis
 
-# Analyze with live server data (if server is running on port 9090)
-python doc_generator.py examples/go-server --inspect-server 9090
+## 🔧 Advanced Settings
 
-# Quick test of any Go web API
-python doc_generator.py /path/to/my/go/api --inspect-server 3000
-```
+Access advanced configuration through the settings menu (option 4):
 
-## Supported Frameworks
+### 🔄 Recursive Scanning
+- **Enabled (default)**: Scans all subdirectories
+- **Disabled**: Only scans the specified directory
+
+### 📝 Duplicate Resolution Strategies
+1. **Keep First** (default): Preserve the first endpoint found
+2. **Replace with New**: Use endpoint with better description
+3. **Merge Descriptions**: Combine information from both endpoints
+
+### 🎯 Custom Output Files
+- Configure API documentation filename
+- Set duplicate report filename
+- Customize output locations
+
+## 🎨 Supported Frameworks
 
 ### ✅ Framework Compatibility
 
-- **Gin**: `router.GET/POST/PUT/DELETE("/path", handler)`
-- **Echo**: `e.GET/POST/PUT/DELETE("/path", handler)`
-- **Gorilla Mux**: `r.HandleFunc("/path", handler).Methods("GET")`
-- **net/http**: `http.HandleFunc("/path", handler)`
+| Framework | Pattern Support | Status |
+|-----------|-----------------|--------|
+| **Gin** | `router.GET/POST("/path", handler)` | ✅ Full Support |
+| **Echo** | `e.GET/POST("/path", handler)` | ✅ Full Support |
+| **Gorilla Mux** | `r.HandleFunc("/path", handler)` | ✅ Full Support |
+| **net/http** | `http.HandleFunc("/path", handler)` | ✅ Full Support |
 
-### 🔧 Framework Detection
+### 🔍 Smart Detection Features
+- **Automatic Framework Recognition**: No configuration needed
+- **Comment Filtering**: Ignores commented-out code
+- **Group Route Support**: Handles nested routing patterns
+- **Handler Documentation**: Extracts function comments
+- **Parameter Detection**: Identifies path parameters (`:id`, `{id}`)
 
-The analyzer automatically detects and parses:
-- Direct router method calls
-- Group-based routing patterns
-- Handler function comments and documentation
-- Request/response data structures
-- HTTP method definitions
+## 📊 Output Files
 
-## Output
+### 🚀 `apidocs.md` - Main Documentation
+Comprehensive API documentation with:
+- **Visual Headers**: Emoji-enhanced sections
+- **Statistical Summaries**: Endpoint counts and method distribution
+- **Interactive Examples**: Ready-to-use curl commands
+- **Data Shapes**: Real or inferred request/response structures
+- **Detailed Descriptions**: Extracted from code comments
 
-Generates comprehensive `apidocs.md` with:
+### 📈 `duplicates_report.md` - Conflict Analysis
+Detailed duplicate endpoint analysis:
+- **Conflict Detection**: Lists all duplicate endpoints found
+- **Resolution Details**: Shows how each conflict was resolved
+- **File Tracking**: Identifies source files for each endpoint
+- **Statistics**: Summary of duplicate patterns
 
-### 📊 Analysis Summary
-- Total endpoints discovered
-- HTTP method distribution
-- Framework usage statistics
-- Documentation coverage metrics
+### 📋 Example Outputs
 
-### 🔗 Per-Endpoint Documentation
-- Complete curl examples for testing
-- HTTP method and path information
-- Handler function references
-- Auto-generated example data structures
-
-### 🎯 Live Data Inspection Results
-When connected to a running server:
-- Real JSON request/response examples
-- Actual data shape validation
-- Server compatibility verification
-
-### 📈 Example Output
-
+#### Main Documentation Structure
 ```markdown
 # 🚀 API Documentation
 
+**Status**: Ready 100.00% • 📅 2024-01-15 14:30:22
+
 ## 📊 API Overview
 | Metric | Value |
-|---|---|
-| 🔗 Total Endpoints | 12 |
-| 📁 Route Groups | 3 |
-| 🔧 HTTP Methods | 4 |
+|--------|-------|
+| 🔗 Total Endpoints | 15 |
+| 📁 Route Groups | 4 |
+| 🔧 HTTP Methods | 5 |
 
-### HTTP Method Distribution
-🟢 GET: 8 | 🔵 POST: 2 | 🟡 PUT: 1 | 🔴 DELETE: 1
+📊 Duplicate Analysis:
+• Unique endpoints: 15
+• Duplicates detected: 3
+• Duplicates skipped: 3
+✅ No duplicate endpoints detected
 
-## 🔧 Detailed Endpoint Documentation
-- 🟢 GET `/users` - Get all users
-- 🔵 POST `/users` - Create new user
-- 🟡 PUT `/users/{id}` - Update user
-- 🔴 DELETE `/users/{id}` - Delete user
+🟢 GET: 8 | 🔵 POST: 4 | 🟡 PUT: 2 | 🔴 DELETE: 1
 ```
+
+#### Duplicate Report Structure
+```markdown
+# Duplicate Endpoints Report
+
+Found 2 duplicate conflicts:
+
+## Conflict 1: GET /api/users
+**Existing:** `getUsersHandler` in `handlers.go`
+- Description: Fetch all users from database
+
+**New:** `listUsers` in `api.go`  
+- Description: Returns user list with pagination
+
+**Resolution:** Descriptions Merged
+```
+
+## 🛠️ Development & Troubleshooting
+
+### 🐛 Common Issues
+
+#### "No API endpoints found"
+- Ensure Go files contain recognizable routing patterns
+- Check that files aren't in excluded directories (`.git`, `node_modules`, `vendor`)
+- Verify your project structure matches supported frameworks
+
+#### Server inspection fails
+- Confirm your Go server is running on the specified port
+- Check that the server accepts HTTP requests
+- Ensure no firewall is blocking connections
+
+#### Duplicate detection too aggressive
+- Adjust resolution strategy in Advanced Settings
+- Check for legitimate endpoint variations
+- Review generated duplicate report for details
+
+### 📋 File Structure
+```
+grabby-documatic/
+├── doc_generator.py          # Main application
+├── README.md                 # This documentation
+├── examples/                 # Example Go server
+│   └── go-server/           # Demo application
+├── apidocs.md               # Generated documentation (output)
+└── duplicates_report.md     # Duplicate analysis (output)
+```
+
+### 🔧 Extending Grabby-Documatic
+
+#### Adding New Frameworks
+1. Add regex patterns in `_extract_*_routes()` methods
+2. Update framework detection logic
+3. Test with sample code patterns
+
+#### Custom Output Formats
+1. Modify `generate_markdown_docs()` function
+2. Add new template variables
+3. Update documentation structure
+
+## 🚨 Security Notes
+
+- **Input Validation**: All paths and inputs are validated and sanitized
+- **XSS Prevention**: HTML tags are stripped from descriptions
+- **Path Traversal**: Directory traversal attempts are blocked
+- **Resource Limits**: Large files (>10MB) are automatically skipped
+
+## 🤝 Contributing
+
+We welcome contributions! Areas of interest:
+- **New Framework Support**: Add support for additional Go web frameworks
+- **Output Formats**: JSON, YAML, or other documentation formats
+- **UI Improvements**: Enhanced interactive experience
+- **Performance**: Further optimization of parsing algorithms
+
+## 📈 Changelog
+
+### Version 2.0 (Latest)
+- ✨ Interactive menu system with ASCII art
+- 🔍 Advanced duplicate detection and resolution
+- 🛡️ Enhanced security and validation  
+- ⚡ Performance optimizations
+- 📊 Comprehensive reporting system
+
+### Version 1.0
+- Basic Go code analysis
+- Multi-framework support
+- Live server inspection
+- Markdown documentation generation
+
+## 💡 Tips & Best Practices
+
+### 📝 Writing Better API Comments
+```go
+// GetUsers retrieves all users with optional pagination
+// Supports filtering by role and status parameters
+func GetUsers(c *gin.Context) {
+    // handler implementation
+}
+```
+
+### 🏗️ Organizing Your Go Project
+- Group related endpoints in separate files
+- Use consistent naming conventions
+- Add meaningful comments to handlers
+- Keep routing logic separate from business logic
+
+### 🔍 Effective Duplicate Management
+- Use descriptive handler function names
+- Avoid identical paths across different files
+- Leverage the merge descriptions strategy for related endpoints
+- Regular duplicate analysis during development
 
 ## License
 
