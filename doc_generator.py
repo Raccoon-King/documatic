@@ -6,6 +6,19 @@ import requests
 from datetime import datetime
 from urllib.parse import urljoin
 import time
+import boto3
+from bedrock import get_bedrock_client, invoke_model
+
+def generate_llm_description(func_name, func_code):
+    """Generates a description for a function using the Bedrock LLM."""
+    try:
+        bedrock_client = get_bedrock_client()
+        prompt = f"Generate a concise, one-sentence description for the following Go function:\n\n```go\n{func_code}\n```"
+        description = invoke_model(bedrock_client, prompt)
+        return description.strip()
+    except Exception as e:
+        print(f"Error generating LLM description: {e}")
+        return ""
 
 class APIDocumentation:
     def __init__(self, path, method, description, handler_func="", data_shapes=None):
@@ -93,6 +106,7 @@ class GoCodeAnalyzer:
         self.seen_endpoints = set()  # Track unique endpoints to prevent duplicates
         self.duplicate_tracker = {}  # Track all attempts to add endpoints
         self.duplicate_conflicts = []  # Store duplicate conflicts for reporting
+        self.use_llm = False
         self.stats = {
             'files_processed': 0,
             'endpoints_found': 0,
@@ -606,8 +620,7 @@ class GoCodeAnalyzer:
                             if not description or description.strip() == "":
                                 description = "Router endpoint"
                             
-                            # Try to analyze handler function for more details
-                            enhanced_description = self._analyze_handler_function(content, handler_func, description)
+                            enhanced_description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                             
                             endpoint = APIDocumentation(
                                 path=full_path,
@@ -644,7 +657,7 @@ class GoCodeAnalyzer:
                             if not description or description.strip() == "":
                                 description = "Router endpoint"
                             
-                            enhanced_description = self._analyze_handler_function(content, handler_func, description)
+                            enhanced_description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                             
                             endpoint = APIDocumentation(
                                 path=full_path,
@@ -699,7 +712,7 @@ class GoCodeAnalyzer:
             
         return methods_found
     
-    def _analyze_handler_function(self, content, handler_func, base_description):
+    def _analyze_handler_function(self, content, handler_func, base_description, use_llm=False):
         """Analyze handler function to extract more details for documentation"""
         try:
             # Handle function calls like jade.CreateNew(getAuthData, db.conn)
@@ -760,9 +773,13 @@ class GoCodeAnalyzer:
                     if any(val_keyword in func_body for val_keyword in ['validate', 'valid', 'check']):
                         enhancements.append("includes input validation")
                     
-                    if enhancements:
-                        return f"{base_description} - {', '.join(enhancements)}"
-            
+            if use_llm and not base_description:
+                func_pattern = rf'func\s+{re.escape(handler_func)}\s*\([^)]*\)\s*[^\{]*\{{(.*)}`
+                func_match = re.search(func_pattern, content, re.DOTALL)
+                if func_match:
+                    func_code = func_match.group(0)
+                    base_description = generate_llm_description(handler_func, func_code)
+
             return base_description
             
         except Exception as e:
@@ -1247,11 +1264,12 @@ def display_main_menu():
     print("\n📋 What would you like to do?")
     print("1. 📁 Analyze Go project directory")
     print("2. 🔬 Analyze with live server inspection")
-    print("3. 📊 Generate duplicate endpoints report")
-    print("4. ⚙️  Advanced settings")
-    print("5. ❓ Help & Info")
-    print("6. 🚪 Exit")
-    return input("\nSelect an option (1-6): ").strip()
+    print("3. 🤖 Analyze with LLM-powered descriptions")
+    print("4. 📊 Generate duplicate endpoints report")
+    print("5. ⚙️  Advanced settings")
+    print("6. ❓ Help & Info")
+    print("7. 🚪 Exit")
+    return input("\nSelect an option (1-7): ").strip()
 
 def get_directory_input():
     """Get directory input from user"""
@@ -1298,7 +1316,7 @@ def display_settings_menu():
     print("4. 🔙 Back to main menu")
     return input("Select setting (1-4): ").strip()
 
-def run_analysis(directory, config, server_port=None):
+def run_analysis(directory, config, server_port=None, use_llm=False):
     """Run the main analysis with given parameters"""
     print_mascot("analyzing")
     print(f"\n🔍 Starting analysis of: {directory}")
@@ -1306,6 +1324,7 @@ def run_analysis(directory, config, server_port=None):
     
     # Create analyzer
     analyzer = GoCodeAnalyzer()
+    analyzer.use_llm = use_llm
     analyzer.enable_recursive = config['recursive']
     
     # Run analysis
@@ -1408,19 +1427,24 @@ def main():
                 run_analysis(directory, config, port)
                 input("\nPress Enter to continue...")
                 
-        elif choice == '3':  # Generate duplicate report only
-            directory = get_directory_input()
-            if confirm_action(f"📊 Generate duplicate report for '{directory}'?"):
-                analyzer = GoCodeAnalyzer()
-                analyzer.analyze_directory(directory)
-                duplicate_report = analyzer.generate_duplicate_report()
-                with open(config['duplicate_report_file'], "w", encoding="utf-8") as f:
-                    f.write(duplicate_report)
-                print(f"✅ Duplicate report saved to {config['duplicate_report_file']}")
-                input("\nPress Enter to continue...")
-                
-        elif choice == '4':  # Settings
-            settings_choice = display_settings_menu()
+                elif choice == '3':  # Analyze with LLM
+                    directory = get_directory_input()
+                    if confirm_action(f"🤖 Analyze directory '{directory}' with LLM-powered descriptions?"):
+                        run_analysis(directory, config, use_llm=True)
+                        input("\nPress Enter to continue...")
+        
+                elif choice == '4':  # Generate duplicate report only
+                    directory = get_directory_input()
+                    if confirm_action(f"📊 Generate duplicate report for '{directory}'?"):
+                        analyzer = GoCodeAnalyzer()
+                        analyzer.analyze_directory(directory)
+                        duplicate_report = analyzer.generate_duplicate_report()
+                        with open(config['duplicate_report_file'], "w", encoding="utf-8") as f:
+                            f.write(duplicate_report)
+                        print(f"✅ Duplicate report saved to {config['duplicate_report_file']}")
+                        input("\nPress Enter to continue...")
+        
+                elif choice == '5':  # Settings            settings_choice = display_settings_menu()
             
             if settings_choice == '1':  # Toggle recursive
                 config['recursive'] = not config['recursive']
@@ -1450,18 +1474,18 @@ def main():
                 
             input("Press Enter to continue...")
                 
-        elif choice == '5':  # Help
+        elif choice == '6':  # Help
             show_help()
             input("\nPress Enter to continue...")
             
-        elif choice == '6':  # Exit
+        elif choice == '7':  # Exit
             print_mascot("goodbye")
             print("\n👋 Thank you for using Grabby Documatic!")
             print("📚 Happy documenting!")
             break
             
         else:
-            print("❌ Invalid option. Please select 1-6.")
+            print("❌ Invalid option. Please select 1-7.")
             input("Press Enter to continue...")
 
 if __name__ == "__main__":
