@@ -462,6 +462,7 @@ class GoCodeAnalyzer:
                         
                     # Look for comments above the call
                     description = self._find_function_comment(content, handler_func, match.start())
+                    description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
 
                     if path and handler_func:
                         endpoint = APIDocumentation(
@@ -500,6 +501,7 @@ class GoCodeAnalyzer:
                         # Validate path
                         if path and path.startswith('/') and handler_func:
                             description = self._find_function_comment(content, handler_func, match.start())
+                            description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                             endpoint = APIDocumentation(
                                 path=path,
                                 method=method,
@@ -523,6 +525,7 @@ class GoCodeAnalyzer:
 
                 if path:
                     description = self._find_function_comment(content, handler_func, match.start())
+                    description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                     endpoint = APIDocumentation(
                         path=path,
                         method=method_name,
@@ -547,6 +550,7 @@ class GoCodeAnalyzer:
 
                 if path:
                     description = self._find_function_comment(content, handler_func, match.start())
+                    description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                     endpoint = APIDocumentation(
                         path=path,
                         method=method,
@@ -773,12 +777,8 @@ class GoCodeAnalyzer:
                     if any(val_keyword in func_body for val_keyword in ['validate', 'valid', 'check']):
                         enhancements.append("includes input validation")
                     
-            if use_llm and not base_description:
-                func_pattern = rf'func\s+{re.escape(handler_func)}\s*\([^)]*\)\s*[^\{]*\{{(.*)}`
+                func_pattern = rf'func\s+{re.escape(handler_func)}\s*\([^)]*\)\s*[^{{]*{{(.*?)}}`
                 func_match = re.search(func_pattern, content, re.DOTALL)
-                if func_match:
-                    func_code = func_match.group(0)
-                    base_description = generate_llm_description(handler_func, func_code)
 
             return base_description
             
@@ -802,6 +802,7 @@ class GoCodeAnalyzer:
 
                 if path and method not in ['Gin', 'Echo', 'Mux']:  # Avoid duplication
                     description = self._find_function_comment(content, handler_func, match.start())
+                    description = self._analyze_handler_function(content, handler_func, description, use_llm=self.use_llm)
                     endpoint = APIDocumentation(
                         path=path,
                         method=method.upper(),
